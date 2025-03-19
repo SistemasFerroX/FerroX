@@ -8,13 +8,33 @@ class MessageHandler {
     this.cotizacionState = {};
     // Estado para las conversaciones de asistencia (consultas de soporte)
     this.assistandState = {};
-    // Estado para el modo soporte (puedes usar uno solo si lo prefieres)
+    // Estado para el modo soporte
     this.soporteState = {};
+    // Historial de conversación (para dar contexto a ChatGPT y como indicador de primer contacto)
+    this.conversationHistory = {};
   }
 
   async handleIncomingMessage(message, senderInfo) {
     if (message?.type === 'text') {
       const incomingMessage = message.text.body.trim();
+
+      // Si es el primer mensaje del usuario, guarda su número y nombre en Google Sheets
+      if (!this.conversationHistory[message.from]) {
+        this.conversationHistory[message.from] = [];
+        const initialRow = [
+          message.from,                           // WhatsApp
+          this.getSenderName(senderInfo),         // Nombre
+          "",                                     // Tipo (vacío)
+          "",                                     // Cantidad (vacío)
+          "",                                     // Unidad (vacío)
+          "",                                     // Ciudad (vacío)
+          new Date().toLocaleString()             // Fecha de contacto
+        ];
+        await googleSheetsService(initialRow);
+      }
+      
+      // Agrega el mensaje al historial (para ChatGPT)
+      this.conversationHistory[message.from].push(`Usuario: ${incomingMessage}`);
       
       // Si el usuario está en modo soporte o asistencia y escribe "salir", se sale de ese modo
       if ((this.soporteState[message.from] || this.assistandState[message.from]) &&
@@ -30,17 +50,19 @@ class MessageHandler {
         return;
       }
       
-      // Si el usuario está en modo soporte (para cualquier otro mensaje)
+      // Si el usuario está en modo soporte, se redirige a ChatGPT con historial
       if (this.soporteState[message.from]) {
-        const chatResponse = await this.handleChatGPT(incomingMessage);
+        const chatResponse = await this.handleChatGPT(incomingMessage, this.conversationHistory[message.from]);
+        this.conversationHistory[message.from].push(`Asistente: ${chatResponse}`);
         await whatsappService.sendMessage(message.from, chatResponse, message.id);
         await whatsappService.markAsRead(message.id);
         return;
       }
       
-      // Si el usuario está en modo asistencia (consultar) para soporte
+      // Si el usuario está en modo asistencia (consultar)
       if (this.assistandState[message.from]) {
-        const chatResponse = await this.handleChatGPT(incomingMessage);
+        const chatResponse = await this.handleChatGPT(incomingMessage, this.conversationHistory[message.from]);
+        this.conversationHistory[message.from].push(`Asistente: ${chatResponse}`);
         await whatsappService.sendMessage(message.from, chatResponse, message.id);
         await whatsappService.markAsRead(message.id);
         return;
@@ -98,7 +120,7 @@ class MessageHandler {
 
   async sendWelcomeMenu(to) {
     const menuMessage = "Elige una opción";
-    
+    // Menú: Catalogo, Cotizar y Consultar (que activa el modo asistencia)
     const buttons = [
       { type: 'reply', reply: { id: 'option_1', title: 'Catalogo' } },
       { type: 'reply', reply: { id: 'option_2', title: 'Cotizar' } },
@@ -118,9 +140,10 @@ class MessageHandler {
         await this.startCotizacion(to, senderInfo);
         break;
       case 'consultar':
-        // Activa el modo asistencia/soporte para consultas
+        // Activa el modo asistencia para consultas y reinicia el historial si no existe
         this.assistandState[to] = { step: 'question' };
-        response = 'Realiza tu consulta y escribe (salir) para finalizar el soporte';
+        this.conversationHistory[to] = this.conversationHistory[to] || [];
+        response = 'Realiza tu consulta y escribe "salir" para finalizar el soporte';
         await whatsappService.sendMessage(to, response);
         break;
       case 'soporte':
@@ -173,11 +196,12 @@ class MessageHandler {
 
   async startCotizacion(to, senderInfo) {
     const name = this.getSenderName(senderInfo);
-    // Inicializa el estado de la cotización para este usuario, guardando el nombre
+    // Inicializa el estado de cotización para este usuario, incluyendo el nombre
     this.cotizacionState[to] = {
       stage: 'product',
       product: '',
       quantity: '',
+      unit: '',  // Nuevo campo para unidad
       city: '',
       name
     };
@@ -186,15 +210,17 @@ class MessageHandler {
   }
 
   async startSoporte(to) {
-    // Activa el modo soporte para el usuario
     this.soporteState[to] = true;
+    this.conversationHistory[to] = this.conversationHistory[to] || [];
     const welcomeSoporte = "Bienvenido al soporte de Ferraceros. Cuéntame, ¿en qué puedo ayudarte? (Escribe 'salir' para terminar el soporte)";
     await whatsappService.sendMessage(to, welcomeSoporte);
   }
 
-  async handleChatGPT(userMessage) {
+  async handleChatGPT(userMessage, history = []) {
     try {
-      const response = await openAiService(userMessage);
+      const contexto = history.join('\n');
+      const prompt = `Contexto previo:\n${contexto}\nPregunta: ${userMessage}`;
+      const response = await openAiService(prompt);
       return response || "Lo siento, no tengo respuesta en este momento.";
     } catch (error) {
       console.error("Error en handleChatGPT:", error);
@@ -212,27 +238,33 @@ class MessageHandler {
     if (state.stage === 'product') {
       state.product = incomingMessage;
       state.stage = 'quantity';
-      const nextMessage = '- Cantidad (en unidades, kilos o metros)';
+      const nextMessage = '- Cantidad (ejemplo: 800)';
       await whatsappService.sendMessage(to, nextMessage);
     } else if (state.stage === 'quantity') {
       state.quantity = incomingMessage;
+      state.stage = 'unit';
+      const nextMessage = '- Unidad (ejemplo: kilos, unidades, etc.)';
+      await whatsappService.sendMessage(to, nextMessage);
+    } else if (state.stage === 'unit') {
+      state.unit = incomingMessage;
       state.stage = 'city';
       const nextMessage = '- Ciudad de entrega (ejemplo: Bogotá, Medellín)';
       await whatsappService.sendMessage(to, nextMessage);
     } else if (state.stage === 'city') {
       state.city = incomingMessage;
-      const summary = `Resumen de su cotización:\nProducto: ${state.product}\nCantidad: ${state.quantity}\nCiudad: ${state.city}\nEn un momento se le responderá su cotización.`;
+      const summary = `Resumen de su cotización:\nProducto: ${state.product}\nCantidad: ${state.quantity}\nUnidad: ${state.unit}\nCiudad: ${state.city}\nEn un momento se le responderá su cotización.`;
       await whatsappService.sendMessage(to, summary);
       
       // Orden de columnas en la hoja:
-      // A: whatsapp, B: nombre, C: tipo, D: cantidad, E: ciudad, F: fecha
+      // A: whatsapp, B: nombre, C: tipo, D: cantidad, E: unidad, F: ciudad, G: fecha
       await googleSheetsService([
-        to,                           // WhatsApp
-        state.name,                   // Nombre
-        state.product,                // Tipo
-        state.quantity,               // Cantidad
-        state.city,                   // Ciudad
-        new Date().toLocaleString()   // Fecha
+        to,
+        state.name,
+        state.product,
+        state.quantity,
+        state.unit,
+        state.city,
+        new Date().toLocaleString()
       ]);
       
       console.log(`Cotización guardada para ${to}:`, state);
