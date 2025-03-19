@@ -8,35 +8,29 @@ class MessageHandler {
     this.cotizacionState = {};
     // Estado para las conversaciones de asistencia (consultas de soporte)
     this.assistandState = {};
-    // Estado para el modo soporte
+    // Estado para el modo soporte (consulta directa con ChatGPT)
     this.soporteState = {};
-    // Historial de conversación (para dar contexto a ChatGPT y como indicador de primer contacto)
+    // Historial de conversación (para dar contexto a ChatGPT y detectar primer contacto)
     this.conversationHistory = {};
   }
 
   async handleIncomingMessage(message, senderInfo) {
     if (message?.type === 'text') {
       const incomingMessage = message.text.body.trim();
-
-      // Si es el primer mensaje del usuario, guarda su número y nombre en Google Sheets
+      
+      // Si es el primer mensaje del usuario, se envía el saludo y menú inicial
       if (!this.conversationHistory[message.from]) {
         this.conversationHistory[message.from] = [];
-        const initialRow = [
-          message.from,                           // WhatsApp
-          this.getSenderName(senderInfo),         // Nombre
-          "",                                     // Tipo (vacío)
-          "",                                     // Cantidad (vacío)
-          "",                                     // Unidad (vacío)
-          "",                                     // Ciudad (vacío)
-          new Date().toLocaleString()             // Fecha de contacto
-        ];
-        await googleSheetsService(initialRow);
+        await this.sendWelcomeMessage(message.from, message.id, senderInfo);
+        await this.sendWelcomeMenu(message.from);
+        await whatsappService.markAsRead(message.id);
+        return;
       }
       
-      // Agrega el mensaje al historial (para ChatGPT)
+      // Guarda el mensaje en el historial
       this.conversationHistory[message.from].push(`Usuario: ${incomingMessage}`);
       
-      // Si el usuario está en modo soporte o asistencia y escribe "salir", se sale de ese modo
+      // Finaliza modo soporte/asistencia si escribe "salir"
       if ((this.soporteState[message.from] || this.assistandState[message.from]) &&
           incomingMessage.toLowerCase() === 'salir') {
         delete this.soporteState[message.from];
@@ -50,7 +44,7 @@ class MessageHandler {
         return;
       }
       
-      // Si el usuario está en modo soporte, se redirige a ChatGPT con historial
+      // Modo soporte: redirige a ChatGPT con historial
       if (this.soporteState[message.from]) {
         const chatResponse = await this.handleChatGPT(incomingMessage, this.conversationHistory[message.from]);
         this.conversationHistory[message.from].push(`Asistente: ${chatResponse}`);
@@ -59,7 +53,7 @@ class MessageHandler {
         return;
       }
       
-      // Si el usuario está en modo asistencia (consultar)
+      // Modo asistencia (consultar)
       if (this.assistandState[message.from]) {
         const chatResponse = await this.handleChatGPT(incomingMessage, this.conversationHistory[message.from]);
         this.conversationHistory[message.from].push(`Asistente: ${chatResponse}`);
@@ -74,12 +68,9 @@ class MessageHandler {
         await whatsappService.markAsRead(message.id);
         return;
       }
-
-      // Flujo normal: Saludos y menú
-      if (this.isGreeting(incomingMessage.toLowerCase())) {
-        await this.sendWelcomeMessage(message.from, message.id, senderInfo);
-        await this.sendWelcomeMenu(message.from);
-      } else if (incomingMessage.toLowerCase() === 'audio') {
+      
+      // Flujo normal: comandos específicos
+      if (incomingMessage.toLowerCase() === 'audio') {
         await this.sendAudio(message.from);
       } else if (incomingMessage.toLowerCase() === 'imagen') {
         await this.sendImage(message.from);
@@ -120,7 +111,18 @@ class MessageHandler {
 
   async sendWelcomeMenu(to) {
     const menuMessage = "Elige una opción";
-    // Menú: Catalogo, Cotizar y Consultar (que activa el modo asistencia)
+    const buttons = [
+      { type: 'reply', reply: { id: 'option_1', title: 'Catalogo' } },
+      { type: 'reply', reply: { id: 'option_2', title: 'Cotizar' } },
+      { type: 'reply', reply: { id: 'option_3', title: 'Consultar' } }
+    ];
+    await whatsappService.sendInteractiveButtons(to, menuMessage, buttons);
+  }
+
+  // Menú final que se envía después de terminar una cotización
+  async sendFinalMenu(to) {
+    const menuMessage = "Elige una opción";
+    // Opciones: Catalogo, Cotizar, Consultar (que regresa al menú sin saludo)
     const buttons = [
       { type: 'reply', reply: { id: 'option_1', title: 'Catalogo' } },
       { type: 'reply', reply: { id: 'option_2', title: 'Cotizar' } },
@@ -152,6 +154,10 @@ class MessageHandler {
       case 'ubicación':
         response = 'Esta es nuestra Ubicación';
         await whatsappService.sendMessage(to, response);
+        break;
+      case 'volver':
+        // Envía el menú final (sin saludo) para regresar a las opciones
+        await this.sendFinalMenu(to);
         break;
       default:
         response = 'Lo siento, no entendí tu selección. Por favor, elige una de las opciones del menú.';
@@ -196,12 +202,12 @@ class MessageHandler {
 
   async startCotizacion(to, senderInfo) {
     const name = this.getSenderName(senderInfo);
-    // Inicializa el estado de cotización para este usuario, incluyendo el nombre
+    // Inicializa el estado de la cotización para este usuario, incluyendo el nombre
     this.cotizacionState[to] = {
       stage: 'product',
       product: '',
       quantity: '',
-      unit: '',  // Nuevo campo para unidad
+      unit: '',  // Nuevo campo para la unidad
       city: '',
       name
     };
@@ -269,6 +275,8 @@ class MessageHandler {
       
       console.log(`Cotización guardada para ${to}:`, state);
       delete this.cotizacionState[to];
+      // Envía el menú final para que el usuario pueda elegir la siguiente acción
+      await this.sendFinalMenu(to);
     }
   }
 }
