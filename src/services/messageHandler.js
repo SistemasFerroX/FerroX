@@ -1,33 +1,69 @@
 import whatsappService from './whatsappService.js';
+import googleSheetsService from './googleSheetsService.js';
+import openAiService from './openAiService.js';
 
 class MessageHandler {
   constructor() {
-    // Objeto para almacenar el estado de la conversación de cotización por usuario
+    // Estado para las conversaciones de cotización
     this.cotizacionState = {};
+    // Estado para las conversaciones de asistencia (consultas de soporte)
+    this.assistandState = {};
+    // Estado para el modo soporte (puedes usar uno solo si lo prefieres)
+    this.soporteState = {};
   }
 
   async handleIncomingMessage(message, senderInfo) {
-    // Si el mensaje es de tipo texto
     if (message?.type === 'text') {
-      const incomingMessage = message.text.body.toLowerCase().trim();
+      const incomingMessage = message.text.body.trim();
       
-      // Si ya existe una conversación de cotización para este usuario, la gestionamos
+      // Si el usuario está en modo soporte o asistencia y escribe "salir", se sale de ese modo
+      if ((this.soporteState[message.from] || this.assistandState[message.from]) &&
+          incomingMessage.toLowerCase() === 'salir') {
+        delete this.soporteState[message.from];
+        delete this.assistandState[message.from];
+        await whatsappService.sendMessage(
+          message.from, 
+          "Has salido del modo soporte. ¡Gracias por comunicarte!", 
+          message.id
+        );
+        await whatsappService.markAsRead(message.id);
+        return;
+      }
+      
+      // Si el usuario está en modo soporte (para cualquier otro mensaje)
+      if (this.soporteState[message.from]) {
+        const chatResponse = await this.handleChatGPT(incomingMessage);
+        await whatsappService.sendMessage(message.from, chatResponse, message.id);
+        await whatsappService.markAsRead(message.id);
+        return;
+      }
+      
+      // Si el usuario está en modo asistencia (consultar) para soporte
+      if (this.assistandState[message.from]) {
+        const chatResponse = await this.handleChatGPT(incomingMessage);
+        await whatsappService.sendMessage(message.from, chatResponse, message.id);
+        await whatsappService.markAsRead(message.id);
+        return;
+      }
+      
+      // Flujo de cotización
       if (this.cotizacionState[message.from]) {
         await this.handleCotizacionConversation(message.from, incomingMessage);
         await whatsappService.markAsRead(message.id);
-        return; // Salir para no procesar el mensaje de otra forma
+        return;
       }
 
-      if (this.isGreeting(incomingMessage)) {
+      // Flujo normal: Saludos y menú
+      if (this.isGreeting(incomingMessage.toLowerCase())) {
         await this.sendWelcomeMessage(message.from, message.id, senderInfo);
         await this.sendWelcomeMenu(message.from);
-      } else if (incomingMessage === 'audio') {
+      } else if (incomingMessage.toLowerCase() === 'audio') {
         await this.sendAudio(message.from);
-      } else if (incomingMessage === 'imagen') {
+      } else if (incomingMessage.toLowerCase() === 'imagen') {
         await this.sendImage(message.from);
-      } else if (incomingMessage === 'video') {
+      } else if (incomingMessage.toLowerCase() === 'video') {
         await this.sendVideo(message.from);
-      } else if (incomingMessage === 'documento') {
+      } else if (incomingMessage.toLowerCase() === 'documento') {
         await this.sendDocument(message.from);
       } else {
         const response = `Echo: ${message.text.body}`;
@@ -37,9 +73,9 @@ class MessageHandler {
     } else if (message?.type === 'interactive') {
       const opcion = message?.interactive?.button_reply?.title?.toLowerCase().trim();
       if (opcion) {
-        await this.handleMenuOption(message.from, opcion);
+        await this.handleMenuOption(message.from, opcion, senderInfo);
       } else {
-        await whatsappService.sendMessage(message.from, "Opción inválida, intenta de nuevo.");
+        await whatsappService.sendMessage(message.from, "Opción inválida, intenta de nuevo.", message.id);
       }
       await whatsappService.markAsRead(message.id);
     }
@@ -51,7 +87,7 @@ class MessageHandler {
   }
 
   getSenderName(senderInfo) {
-    return senderInfo.profile?.name || senderInfo.wa_id || "Hola amig@";
+    return senderInfo?.profile?.name || senderInfo?.wa_id || "Desconocido";
   }
 
   async sendWelcomeMessage(to, messageId, senderInfo) {
@@ -62,28 +98,33 @@ class MessageHandler {
 
   async sendWelcomeMenu(to) {
     const menuMessage = "Elige una opción";
+    
     const buttons = [
-      { type: 'reply', reply: { id: 'option_1', title: 'Servicios' } },
-      { type: 'reply', reply: { id: 'option_2', title: 'Cotizar' } }, // Acortado
-      { type: 'reply', reply: { id: 'option_3', title: 'Ubicación' } }
+      { type: 'reply', reply: { id: 'option_1', title: 'Catalogo' } },
+      { type: 'reply', reply: { id: 'option_2', title: 'Cotizar' } },
+      { type: 'reply', reply: { id: 'option_3', title: 'Consultar' } }
     ];
     await whatsappService.sendInteractiveButtons(to, menuMessage, buttons);
   }
 
-  async handleMenuOption(to, option) {
+  async handleMenuOption(to, option, senderInfo) {
     let response;
     switch (option) {
-      case 'servicios':
-        // Enviar el catálogo (documento) con el mensaje deseado
+      case 'catalogo':
         await this.sendCatalog(to);
         break;
       case 'solicitar una cotización':
-      case 'cotizar': // en caso de que el usuario escriba "cotizar"
-        await this.startCotizacion(to);
+      case 'cotizar':
+        await this.startCotizacion(to, senderInfo);
         break;
       case 'consultar':
-        response = 'Realiza tu consulta';
+        // Activa el modo asistencia/soporte para consultas
+        this.assistandState[to] = { step: 'question' };
+        response = 'Realiza tu consulta y escribe (salir) para finalizar el soporte';
         await whatsappService.sendMessage(to, response);
+        break;
+      case 'soporte':
+        await this.startSoporte(to);
         break;
       case 'ubicación':
         response = 'Esta es nuestra Ubicación';
@@ -96,14 +137,12 @@ class MessageHandler {
   }
 
   async sendCatalog(to) {
-    // Reemplaza la URL por la dirección pública de tu catálogo PDF
-    const catalogUrl = 'https://tudominio.com/catalogo.pdf';
+    const catalogUrl = 'https://ferraceros.com.co/wp-content/uploads/2025/03/CatalogoFerraceros21_02_25-comprimido-1.pdf';
     const caption = 'Explora nuestro catálogo para conocer otros productos y/o especificaciones técnicas';
     const type = 'document';
     await whatsappService.sendMediaMessage(to, type, catalogUrl, caption);
   }
 
-  // Métodos para enviar otros tipos de medios
   async sendAudio(to) {
     const mediaUrl = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3';
     const caption = 'Esto es un audio';
@@ -132,23 +171,43 @@ class MessageHandler {
     await whatsappService.sendMediaMessage(to, type, mediaUrl, caption);
   }
 
-  // Inicia la conversación de cotización
-  async startCotizacion(to) {
-    // Se inicializa el estado de cotización para este usuario
+  async startCotizacion(to, senderInfo) {
+    const name = this.getSenderName(senderInfo);
+    // Inicializa el estado de la cotización para este usuario, guardando el nombre
     this.cotizacionState[to] = {
       stage: 'product',
       product: '',
       quantity: '',
-      city: ''
+      city: '',
+      name
     };
     const messageText = '¡Entendido! Para enviarle una cotización precisa, por favor indíqueme:\n- Tipo de producto (ejemplo: láminas, tubos, vigas)';
     await whatsappService.sendMessage(to, messageText);
   }
 
-  // Maneja la conversación de cotización paso a paso
+  async startSoporte(to) {
+    // Activa el modo soporte para el usuario
+    this.soporteState[to] = true;
+    const welcomeSoporte = "Bienvenido al soporte de Ferraceros. Cuéntame, ¿en qué puedo ayudarte? (Escribe 'salir' para terminar el soporte)";
+    await whatsappService.sendMessage(to, welcomeSoporte);
+  }
+
+  async handleChatGPT(userMessage) {
+    try {
+      const response = await openAiService(userMessage);
+      return response || "Lo siento, no tengo respuesta en este momento.";
+    } catch (error) {
+      console.error("Error en handleChatGPT:", error);
+      return "Lo siento, hubo un error procesando tu solicitud.";
+    }
+  }
+
   async handleCotizacionConversation(to, incomingMessage) {
     const state = this.cotizacionState[to];
     if (!state) return;
+
+    console.log(`Estado actual para ${to}:`, state);
+    console.log(`Mensaje recibido: "${incomingMessage}"`);
 
     if (state.stage === 'product') {
       state.product = incomingMessage;
@@ -162,10 +221,21 @@ class MessageHandler {
       await whatsappService.sendMessage(to, nextMessage);
     } else if (state.stage === 'city') {
       state.city = incomingMessage;
-      // Se envía el resumen de la cotización
       const summary = `Resumen de su cotización:\nProducto: ${state.product}\nCantidad: ${state.quantity}\nCiudad: ${state.city}\nEn un momento se le responderá su cotización.`;
       await whatsappService.sendMessage(to, summary);
-      // Se elimina el estado de cotización para este usuario
+      
+      // Orden de columnas en la hoja:
+      // A: whatsapp, B: nombre, C: tipo, D: cantidad, E: ciudad, F: fecha
+      await googleSheetsService([
+        to,                           // WhatsApp
+        state.name,                   // Nombre
+        state.product,                // Tipo
+        state.quantity,               // Cantidad
+        state.city,                   // Ciudad
+        new Date().toLocaleString()   // Fecha
+      ]);
+      
+      console.log(`Cotización guardada para ${to}:`, state);
       delete this.cotizacionState[to];
     }
   }
