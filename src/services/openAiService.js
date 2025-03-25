@@ -12,7 +12,7 @@ const OpenAiService = async (message) => {
       messages: [
         { 
           role: 'system', 
-          content: 'Eres un asistente experto en la industria del acero y servicios para el sector metalmecánico en Colombia. Ayuda al usuario a resolver dudas y brindar soporte técnico.' 
+          content: 'Eres un asistente experto en la industria del acero y servicios para el sector metalmecánico en Colombia. Ayuda al usuario a resolver dudas y brindar soporte técnico. Trabajas para la empresa Ferraceros' 
         },
         { role: 'user', content: message }
       ],
