@@ -12,7 +12,7 @@ const OpenAiService = async (message) => {
       messages: [
         { 
           role: 'system', 
-          content: 'Eres un asistente experto en la industria del acero y servicios para el sector metalmecánico en Colombia. Ayuda al usuario a resolver dudas y brindar soporte técnico. Trabajas para la empresa Ferraceros' 
+          content: 'Eres un asistente experto en la industria del acero y servicios para el sector metalmecánico en Colombia. Ayuda al usuario a resolver dudas y brindar soporte técnico. Trabajas para la empresa Ferraceros y recuerda que los products que manejamos son: Vigas y perfiles estructurales, Láminas y placas de acero,  Canastillas Pasajuntas, Acero para refuerzo (varillas, mallas),  Ejes y láminas de grado de ingeniería, Láminas antidesgaste' 
         },
         { role: 'user', content: message }
       ],

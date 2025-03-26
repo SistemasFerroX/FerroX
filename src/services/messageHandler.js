@@ -47,15 +47,14 @@ class MessageHandler {
     this.clearInactivityTimer(user);
   }
 
-  // Retorna el mensaje de despedida formal (con saltos de línea extra entre URLs)
+  // Retorna el mensaje de despedida formal, sin la URL de Ferraceros y con "portafolio de empresas"
   getDespedida() {
     return "Le agradecemos por haber contactado a Ferraceros. En breve, un asesor se pondrá en contacto con usted.\n\n" +
-           "Si requiere información adicional, no dude en comunicarse con nosotros. Le invitamos a conocer nuestro grupo de empresas.\n\n" +
+           "Si requiere información adicional, no dude en comunicarse con nosotros. Le invitamos a conocer nuestro portafolio de empresas.\n\n" +
            "Ferbienes:\n\nhttps://ferbienes.co/\n\n" +
-           "Flexilogistica:\n\nhttps://flexilogistica.com/\n\n" +
+           "Flexilogística:\n\nhttps://flexilogistica.com/\n\n" +
            "Todos Compramos:\n\nhttps://www.todoscompramos.com.co/\n\n" +
-           "Catalan:\n\nhttps://catalan.com.co/blogs/menu\n\n" +
-           "Ferraceros:\n\nhttps://ferraceros.com.co";
+           "Catalán:\n\nhttps://catalan.com.co/blogs/menu";
   }
 
   /**
@@ -64,7 +63,7 @@ class MessageHandler {
   async handleIncomingMessage(message, senderInfo) {
     try {
       // 1. Ignorar mensajes del propio bot (para evitar loops).
-      const myBotNumber = "15556380968"; // Reemplace con su número en formato E.164 sin "+" (por ejemplo, "15556380968@c.us")
+      const myBotNumber = "15556380968"; // Ejemplo: "15556380968@c.us"
       console.log("Valor real de message.from:", message.from);
       if (message.from.includes(myBotNumber)) {
         console.log("Ignorando mensaje proveniente de mi propio número para evitar loops.");
@@ -87,7 +86,6 @@ class MessageHandler {
         if (lowerMsg === 'salir') {
           console.log(`Finalizando chat para ${message.from}`);
           await whatsappService.sendMessage(message.from, despedida, message.id);
-          // Limpia el timer de inactividad para evitar ejecución posterior
           this.clearInactivityTimer(message.from);
           delete this.soporteState[message.from];
           delete this.assistandState[message.from];
@@ -97,17 +95,17 @@ class MessageHandler {
           return;
         }
 
-        // Si es el primer mensaje del usuario, se envía el saludo y el menú inicial, y se guarda su información en Sheets.
+        // Si es el primer mensaje del usuario, se envía el saludo, términos y condiciones, y menú inicial; se guarda su información en Sheets.
         if (!this.conversationHistory[message.from]) {
           console.log(`Primer mensaje de ${message.from}`);
           this.conversationHistory[message.from] = [];
           await this.sendWelcomeMessage(message.from, message.id, senderInfo);
           await this.sendWelcomeMenu(message.from);
+          // Se elimina la columna de satisfacción
           const initialData = [
             message.from,
             this.getSenderName(senderInfo),
-            "", // Columna "satisfacción" vacía
-            "", "", "", "", ""
+            "", "", ""
           ];
           await googleSheetsService(initialData);
           await whatsappService.markAsRead(message.id);
@@ -148,20 +146,11 @@ class MessageHandler {
           return;
         }
 
-        // Comandos específicos (multimedia)
-        if (lowerMsg === 'audio') {
-          await this.sendAudio(message.from);
-        } else if (lowerMsg === 'imagen') {
-          await this.sendImage(message.from);
-        } else if (lowerMsg === 'video') {
-          await this.sendVideo(message.from);
-        } else if (lowerMsg === 'documento') {
-          await this.sendDocument(message.from);
-        } else {
-          // Si no coincide con ningún comando, se responde con un eco formal.
-          const response = `Eco: ${message.text.body}`;
-          await whatsappService.sendMessage(message.from, response, message.id);
-        }
+        // Si el mensaje no coincide con ningún comando esperado, se envía un mensaje de error y se reenvían las opciones.
+        const errorMsg = "No entendí su respuesta. Por favor, seleccione una de las opciones:";
+        await whatsappService.sendMessage(message.from, errorMsg, message.id);
+        // Se reenvía el menú correspondiente (en este caso, el de bienvenida)
+        await this.sendWelcomeMenu(message.from);
         await whatsappService.markAsRead(message.id);
 
       // Procesamiento de mensajes interactivos (botones)
@@ -183,12 +172,16 @@ class MessageHandler {
     return senderInfo?.profile?.name || senderInfo?.wa_id || "Desconocido";
   }
 
+  // Envía el mensaje de bienvenida con términos y condiciones incluidos.
   async sendWelcomeMessage(to, messageId, senderInfo) {
     const name = this.getSenderName(senderInfo);
     const welcomeMessage =
       `Hola ${name}, le damos la bienvenida a Ferraceros, su socio estratégico en soluciones de acero para la industria metalmecánica e infraestructura en Colombia.\n` +
+      `Soy FerroX 🦾, su asesor virtual.\n\n` +
+      `Al continuar con esta conversación, usted autoriza a Ferraceros a disponer de la información que nos proporcione.\n\n` +
+      `Puede consultar nuestra política de privacidad en:\nhttps://ferraceros.com.co/politica-para-el-tratamiento-y-proteccion-de-datos-personales/\n\n` +
       `Puede escribir "salir" en cualquier momento para finalizar la conversación.\n` +
-      `¿En qué podemos asistirle hoy? Por favor, seleccione una opción:`;
+      `¿En qué podemos asistirle hoy?`;
     console.log(`Enviando mensaje de bienvenida a ${to}`);
     await whatsappService.sendMessage(to, welcomeMessage, messageId);
   }
@@ -198,18 +191,18 @@ class MessageHandler {
     const buttons = [
       { type: 'reply', reply: { id: 'option_1', title: 'Catálogo' } },
       { type: 'reply', reply: { id: 'option_2', title: 'Cotizar' } },
-      { type: 'reply', reply: { id: 'option_3', title: 'Consultar' } }
+      { type: 'reply', reply: { id: 'option_3', title: 'FerroX(IA)' } }
     ];
     console.log(`Enviando menú de bienvenida a ${to}`);
     await whatsappService.sendInteractiveButtons(to, menuMessage, buttons);
   }
 
-  // Menú para consultas: 2 botones (Cotizar y Consultar)
+  // Menú para consultas: 2 botones (Cotizar y FerroX(IA))
   async sendConsultMenu(to) {
     const menuMessage = "¿Desea solicitar una cotización o realizar una consulta técnica?";
     const buttons = [
       { type: 'reply', reply: { id: 'option_2', title: 'Cotizar' } },
-      { type: 'reply', reply: { id: 'option_3', title: 'Consultar' } }
+      { type: 'reply', reply: { id: 'option_3', title: 'FerroX(IA)' } }
     ];
     console.log(`Enviando menú de consulta a ${to}`);
     await whatsappService.sendInteractiveButtons(to, menuMessage, buttons);
@@ -238,10 +231,11 @@ class MessageHandler {
         await this.startCotizacion(to, senderInfo);
         break;
       case 'consultar':
+      case 'ferrox(ia)':
+        // Si el usuario escribe "consultar" o "ferrox(ia)", se procesa como asistencia con FerroX.
+        await whatsappService.sendMessage(to, "Hola, soy FerroX, su asistente virtual. ¿En qué podemos asistirle?", null);
         this.assistandState[to] = { step: 'question' };
         this.conversationHistory[to] = this.conversationHistory[to] || [];
-        response = 'Por favor, realice su consulta y escriba "salir" para finalizar el servicio.';
-        await whatsappService.sendMessage(to, response);
         break;
       case 'soporte':
         await this.startSoporte(to);
@@ -257,21 +251,19 @@ class MessageHandler {
         // Finaliza la conversación directamente
         const despedida = this.getDespedida();
         await whatsappService.sendMessage(to, despedida, null);
-        // Limpia el timer de inactividad
         this.clearInactivityTimer(to);
         delete this.soporteState[to];
         delete this.assistandState[to];
         delete this.cotizacionState[to];
         delete this.conversationHistory[to];
         break;
-      // Casos para el menú post-cotización
+      // Menú post-cotización
       case 'sí':
         await this.startCotizacion(to, senderInfo);
         break;
       case 'no':
         const despedidaFinal = this.getDespedida();
         await whatsappService.sendMessage(to, despedidaFinal, null);
-        // Reinicia todos los estados y limpia el timer
         this.clearInactivityTimer(to);
         delete this.soporteState[to];
         delete this.assistandState[to];
@@ -290,7 +282,9 @@ class MessageHandler {
     const type = 'document';
     console.log(`Enviando catálogo a ${to}`);
     await whatsappService.sendMediaMessage(to, type, catalogUrl, caption);
-    // Después de enviar el catálogo, se muestra el menú de consulta
+    // Envía un mensaje adicional con la URL de Ferraceros.
+    await whatsappService.sendMessage(to, "Para más información, visite: https://ferraceros.com.co/", null);
+    // Después de enviar el catálogo, se muestra el menú de consulta.
     await this.sendConsultMenu(to);
   }
 
@@ -336,15 +330,16 @@ class MessageHandler {
       city: '',
       name
     };
+    // Se envía el mensaje con las opciones usando emojis para los números y con una línea extra de separación.
     const messageText =
       'Muy bien. En Ferraceros ofrecemos una amplia gama de productos de acero.\n' +
-      'Por favor, seleccione el tipo de producto que le interesa:\n\n' +
-      '1. -Vigas y perfiles estructurales\n\n' +
-      '2. -Láminas y placas de acero\n\n' +
-      '3. -Canastillas Pasajuntas\n\n' +
-      '4. -Acero para refuerzo (varillas, mallas)\n\n' +
-      '5. -Ejes y láminas de grado de ingeniería\n\n' +
-      '6. -Láminas antidesgaste';
+      'Por favor, seleccione el tipo de producto que le interesa (Escriba el número de la opción de su interés):\n\n' +
+      '1️⃣  Vigas y perfiles estructurales\n\n' +
+      '2️⃣  Láminas y placas de acero\n\n' +
+      '3️⃣  Canastillas Pasajuntas\n\n' +
+      '4️⃣  Acero para refuerzo (varillas, mallas)\n\n' +
+      '5️⃣  Ejes y láminas de grado de ingeniería\n\n' +
+      '6️⃣  Láminas antidesgaste';
     console.log(`Iniciando cotización para ${to}`);
     await whatsappService.sendMessage(to, messageText);
   }
@@ -378,7 +373,7 @@ class MessageHandler {
     console.log(`Mensaje recibido: "${incomingMessage}"`);
 
     if (state.stage === 'product') {
-      // Se espera un número para seleccionar el producto
+      // Se espera un número (dígito o emoji) para seleccionar el producto
       const productOptions = {
         "1": "Vigas y perfiles estructurales",
         "2": "Láminas y placas de acero",
@@ -387,20 +382,52 @@ class MessageHandler {
         "5": "Ejes y láminas de grado de ingeniería",
         "6": "Láminas antidesgaste"
       };
-      state.product = productOptions[incomingMessage] || incomingMessage;
+
+      // Mapeo de emojis a dígitos
+      const emojiToDigit = {
+        "1️⃣": "1",
+        "2️⃣": "2",
+        "3️⃣": "3",
+        "4️⃣": "4",
+        "5️⃣": "5",
+        "6️⃣": "6"
+      };
+
+      let selected = incomingMessage;
+      if (emojiToDigit[incomingMessage]) {
+        selected = emojiToDigit[incomingMessage];
+      }
+
+      // Si la selección no es válida, se envía un mensaje de error y se reenvían las opciones.
+      if (!productOptions[selected]) {
+        const errorMsg = "No entendí su selección. Por favor, ingrese un número válido (1️⃣ a 6️⃣).";
+        await whatsappService.sendMessage(to, errorMsg, null);
+        const productOptionsMsg =
+          "Por favor, seleccione el tipo de producto que le interesa:\n\n" +
+          "1️⃣  Vigas y perfiles estructurales\n\n" +
+          "2️⃣  Láminas y placas de acero\n\n" +
+          "3️⃣  Canastillas Pasajuntas\n\n" +
+          "4️⃣  Acero para refuerzo (varillas, mallas)\n\n" +
+          "5️⃣  Ejes y láminas de grado de ingeniería\n\n" +
+          "6️⃣  Láminas antidesgaste";
+        await whatsappService.sendMessage(to, productOptionsMsg, null);
+        return;
+      }
+
+      state.product = productOptions[selected];
       state.stage = 'quantity';
       const nextMessage = '- Por favor, indique la cantidad (ejemplo: 800)';
-      await whatsappService.sendMessage(to, nextMessage);
+      await whatsappService.sendMessage(to, nextMessage, null);
     } else if (state.stage === 'quantity') {
       state.quantity = incomingMessage;
       state.stage = 'unit';
       const nextMessage = '- Por favor, indique la unidad (ejemplo: kilos, unidades, etc.)';
-      await whatsappService.sendMessage(to, nextMessage);
+      await whatsappService.sendMessage(to, nextMessage, null);
     } else if (state.stage === 'unit') {
       state.unit = incomingMessage;
       state.stage = 'city';
       const nextMessage = '- Por favor, indique la ciudad de entrega (ejemplo: Bogotá, Medellín, etc.)';
-      await whatsappService.sendMessage(to, nextMessage);
+      await whatsappService.sendMessage(to, nextMessage, null);
     } else if (state.stage === 'city') {
       state.city = incomingMessage;
       const summary =
@@ -410,9 +437,9 @@ class MessageHandler {
         `Unidad: ${state.unit}\n\n` +
         `Ciudad: ${state.city}\n\n` +
         `En breve, un asesor se pondrá en contacto con usted.`;
-      await whatsappService.sendMessage(to, summary);
+      await whatsappService.sendMessage(to, summary, null);
       
-      // Guarda la cotización en Google Sheets (Columnas: Número, Nombre, Producto, Cantidad, Unidad, Ciudad, Fecha)
+      // Guarda la cotización en Google Sheets (Número, Nombre, Producto, Cantidad, Unidad, Ciudad, Fecha)
       await googleSheetsService([
         to,
         state.name,
