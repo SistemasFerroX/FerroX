@@ -1,6 +1,6 @@
 {
     "whatch": ["src"],
     "exit": "js,json",
-    "ignore": ["node_modules/*, "],
+    "ignore": ["node_modules/*"],
     "exec": "node src/app.js"
 }
